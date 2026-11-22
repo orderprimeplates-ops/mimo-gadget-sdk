@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { handle, config } from '../src/index.js';
+import { handle, config, clip } from '../src/index.js';
 import { Budget, reserve, refund, periodStart, nextPeriodStart } from '../src/budget.js';
 import { sameHex, parseDeviceTokens, TOKEN_RE } from '../src/auth.js';
 
@@ -138,7 +138,13 @@ test('wrangler.toml: MIMO voice by default, decoder-compatible MP3, off until ac
   assert.equal(cfg.format, 'mp3_24000_48');
   assert.equal(cfg.model, 'eleven_flash_v2_5');
   assert.equal(cfg.enabled, false);
-  assert.equal(cfg.maxText, 1000);   // the firmware's MIMO_TTS_TEXT_MAX
+  // Sized for the ElevenLabs Free plan (10,000 credits a month).
+  assert.equal(cfg.maxText, 300);
+  assert.equal(cfg.deviceDaily, 500);
+  assert.equal(cfg.monthly, 8000);
+  // A missing setting never means a bigger budget.
+  const bare = config({});
+  assert.deepEqual([bare.enabled, bare.maxText, bare.deviceDaily, bare.monthly], [false, 300, 500, 8000]);
 });
 
 test('wrangler.toml and .gitignore hold no secrets and keep local ones out of git', () => {
@@ -252,7 +258,6 @@ test('bad requests are refused before anything is spent', async () => {
     [{ body: { v: 2, voice: 'mimo', format: 'mp3', text: 'hi' } }, 400],
     [{ body: { v: 1, voice: 'mimo', format: 'wav', text: 'hi' } }, 400],
     [{ text: '   ' }, 400],
-    [{ text: 'a'.repeat(1001) }, 400],
     [{ voice: 'nobody' }, 400],
     [{ voice: 'Bad Voice"' }, 400],
     [{ raw: JSON.stringify({ v: 1, voice: 'mimo', format: 'mp3', text: 'x'.repeat(9000) }) }, 413],
@@ -264,8 +269,7 @@ test('bad requests are refused before anything is spent', async () => {
     assert.equal(fetch.calls.length, 0);
     assert.equal(e.BUDGET.storage.map.size, 0);
   }
-  assert.equal((await run(speak({ text: 'a'.repeat(1000) }))).res.status, 200);
-  assert.equal((await run(speak({ text: '\u{1F600}'.repeat(1000) }))).res.status, 200);   // characters, not bytes
+  assert.equal((await run(speak({ text: 'a'.repeat(300) }))).res.status, 200);
 });
 
 // ---- Rate limits and spending ----
@@ -362,6 +366,61 @@ test('the Durable Object runs each budget change inside blockConcurrencyWhile', 
   assert.equal((await res.json()).ok, true);
   assert.equal(calls, 1);
   assert.equal(inside, 0);
+});
+
+// ---- The Free-plan limits as shipped (wrangler.toml) ----
+
+test('long replies: only the first 300 characters are spoken and counted, cut at a sentence', async () => {
+  const sentence = 'MIMO loves marshmallows. ';                        // 25 characters
+  const long = sentence.repeat(40);                                   // 1000: the firmware's most
+  const { res, fetch } = await run(speak({ text: long }));
+  assert.equal(res.status, 200);
+  const spoken = fetch.calls[0].body.text;
+  assert.ok([...spoken].length <= 300);
+  assert.ok(spoken.endsWith('marshmallows.'));                         // a whole sentence
+  assert.equal(res.headers.get('x-mimo-chars'), String([...spoken].length));
+  assert.equal(res.headers.get('x-mimo-clipped'), '1');
+  // Short replies go through untouched.
+  const short = await run(speak({ text: "Hi! I'm MIMO." }));
+  assert.equal(short.fetch.calls[0].body.text, "Hi! I'm MIMO.");
+  assert.equal(short.res.headers.get('x-mimo-clipped'), '0');
+});
+
+test('clip(): sentence, then word, then hard cut; characters, not bytes', () => {
+  assert.equal(clip('Short.', 300), 'Short.');
+  assert.equal(clip('One two. ' + 'x'.repeat(20) + ' tail', 15), 'One two.');      // the sentence that fits
+  assert.equal(clip('aaaa bbbb cccc dddd', 12), 'aaaa bbbb');                 // no sentence: last word
+  assert.equal(clip('x'.repeat(50), 10), 'x'.repeat(10));                    // no break at all
+  assert.equal([...clip('\u{1F600}'.repeat(400), 300)].length, 300);        // emoji count as one each
+  assert.equal(clip('Hi. ' + 'z'.repeat(400), 300), 'Hi. ' + 'z'.repeat(296));  // a sentence ending too early isn't used
+});
+
+test('the shipped daily limit (500 per device) and monthly budget (8000) are enforced', async () => {
+  const e = env({ ...wranglerVars(), SPEECH_ENABLED: 'true' });   // the shipped limits
+  const text = 'w'.repeat(250);
+  assert.equal((await run(speak({ text }), e)).res.status, 200);   // 250
+  assert.equal((await run(speak({ text }), e)).res.status, 200);   // 500: exactly the cap
+  const over = await run(speak({ text: 'one more' }), e);
+  assert.equal(over.res.status, 429);
+  assert.equal(over.fetch.calls.length, 0);                        // ElevenLabs never asked
+  assert.match(await over.res.text(), /device daily limit/);
+  // The month: 16 devices' worth of a full day each is 8000; the next is refused.
+  const tokens = Array.from({ length: 17 }, (_, i) => 'mimo_dev_' + String(i).padStart(2, '0') + 'K'.repeat(41));
+  const many = env({ ...wranglerVars(), SPEECH_ENABLED: 'true',
+    DEVICE_TOKENS: JSON.stringify(Object.fromEntries(tokens.map((t, i) => [`dev${i}`, [sha(t)]]))) });
+  let spent = 0;
+  for (let i = 0; i < 16; i++) {
+    for (let k = 0; k < 2; k++) {
+      const r = await run(speak({ token: tokens[i], text }), many);
+      assert.equal(r.res.status, 200);
+      spent += 250;
+    }
+  }
+  assert.equal(spent, 8000);
+  const refused = await run(speak({ token: tokens[16], text: 'hello' }), many);
+  assert.equal(refused.res.status, 429);
+  assert.match(await refused.res.text(), /monthly budget/);
+  assert.equal(refused.fetch.calls.length, 0);
 });
 
 // ---- ElevenLabs failures ----

@@ -301,9 +301,16 @@ class MimoRelayContract(unittest.TestCase):
         self.assertIn(f'/^{rule}$/', auth)
         self.assertIn(f"'^{rule}$'", tool)
         toml = (relay / 'wrangler.toml').read_text()
+        # The firmware sends up to MIMO_TTS_TEXT_MAX bytes; the relay speaks at most
+        # MAX_TEXT_CHARS of it (Free-plan sized) and trims, never refuses, longer text,
+        # so a long reply is still spoken (its start) rather than failing to text.
         text_max = int(re.search(r'#define MIMO_TTS_TEXT_MAX (\d+)', core).group(1))
-        # The firmware sends at most MIMO_TTS_TEXT_MAX bytes: never more characters.
-        self.assertGreaterEqual(int(re.search(r'MAX_TEXT_CHARS = "(\d+)"', toml).group(1)), text_max)
+        relay_max = int(re.search(r'MAX_TEXT_CHARS = "(\d+)"', toml).group(1))
+        self.assertLessEqual(relay_max, text_max)
+        index = (relay / 'src/index.js').read_text()
+        self.assertIn('const text = clip(whole, cfg.maxText);', index)
+        self.assertNotIn('text over', index)
+        self.assertIn('SPEECH_ENABLED = "false"', toml)
         # What the decoder tests play (test_reply.mp3) is what the relay asks for.
         self.assertIn('OUTPUT_FORMAT = "mp3_24000_48"', toml)
         self.assertIn('VOICES = \'{"mimo":"HPxy2zOoCDbTjLDGYzNm"}\'', toml)

@@ -59,11 +59,13 @@ Five layers, any of which stops spending:
 
 1. **Off by default**: `SPEECH_ENABLED = "false"` until you switch it on; it's
    also the kill switch.
-2. **Per request**: at most 1000 characters (`MAX_TEXT_CHARS`, MIMO's own limit).
+2. **Per request**: at most 300 characters spoken (`MAX_TEXT_CHARS`). Longer
+   replies are cut at a sentence and only that part is spoken and counted;
+   MIMO still shows the whole reply.
 3. **Bursts**: 12 requests a minute per device (Cloudflare rate limiter).
 4. **Exact budgets** (Durable Object, characters reserved before ElevenLabs is
-   called, refunded if it fails): `DEVICE_DAILY_CHARS` (10,000) per device per
-   UTC day and `MONTHLY_CHARS` (100,000) for all devices per billing period
+   called, refunded if it fails): `DEVICE_DAILY_CHARS` (500) per device per
+   UTC day and `MONTHLY_CHARS` (8,000) for all devices per billing period
    (from `BILLING_DAY` at `BILLING_HOUR`, matching the ElevenLabs renewal).
    Over budget, MIMO is told to wait (`429`, `Retry-After`) and shows replies
    as text.
@@ -80,7 +82,7 @@ requests fail until the next day.
 cd mimo-relay && npm test      # Node 20+, no network, no Cloudflare or ElevenLabs account
 ```
 
-28 tests: routing, the kill switch, authentication and rotation, the exact
+31 tests: routing, the kill switch, authentication and rotation, the exact
 ElevenLabs request (voice, model, format, key header), MIMO's own request
 body, streaming the MP3 byte for byte, request checks, burst limits, daily and
 billing-period budgets (aligned to the ElevenLabs renewal) with refunds,
@@ -126,12 +128,29 @@ depending on plan (`check-elevenlabs.mjs` reports yours). Plans (check
 | Regular | Pro $99 | Pro $99 | ~$12 | $0 |
 | Heavy | Pro $99 | Scale $299 | ~$30 | $0 |
 
-**The default `MONTHLY_CHARS` of 100,000** is about 13 replies a day (100,000
-÷ 30 ÷ 250). It costs 50,000 credits at 0.5/char or 100,000 at 1/char: the
-**Creator plan ($22)** covers it either way; Starter doesn't. At 0.5/char,
-Creator could allow up to about 217,000 characters (90% of its credits), about
-29 replies a day. Regular use (40 a day) needs Pro, or MIMO stops speaking
-(and shows text) when the budget runs out.
+### Free plan (the shipped defaults)
+
+MIMO starts on the **ElevenLabs Free plan: 10,000 credits a month, $0**, with
+Cloudflare's free plan: **$0 in total**, and nothing can be charged (the Free
+plan has no overage). The defaults fit inside it:
+
+| Setting | Value | Means |
+|---|---|---|
+| `MAX_TEXT_CHARS` | 300 | at most 300 characters spoken per reply |
+| `DEVICE_DAILY_CHARS` | 500 | 1–2 spoken replies a day per device |
+| `MONTHLY_CHARS` | 8,000 | at most 8,000 credits a month even at 1 credit/char: about 26 full-length or 32 typical (250-character) replies, leaving 2,000 credits for tests in the ElevenLabs web app |
+
+When a limit is reached, MIMO shows replies as text until the day or billing
+period starts over. Free-plan voices are for non-commercial use: check
+ElevenLabs' terms before using MIMO for business.
+
+### Paid plans (later)
+
+`MONTHLY_CHARS` of 100,000 would be about 13 replies a day (100,000 ÷ 30 ÷
+250): 50,000 credits at 0.5/char or 100,000 at 1/char, which fits the
+**Creator plan ($22)** either way but not Starter. Regular use (40 a day)
+needs Pro. Raise `MONTHLY_CHARS`, `DEVICE_DAILY_CHARS` and `MAX_TEXT_CHARS`
+only together with the plan.
 
 ## Activate on a Mac (later; each step only when you decide)
 
@@ -143,8 +162,8 @@ minutes. Nothing is charged until step 8, and only for test sentences.
 2. **Get the code** (sign in to GitHub if asked):
    `git clone -b claude/jolly-faraday-ewyut7 https://github.com/orderprimeplates-ops/mimo-gadget-sdk.git`,
    then `cd mimo-gadget-sdk/mimo-relay` and `npm install`.
-3. **ElevenLabs**: choose a plan (Creator for the default budget); in
-   Subscription settings make sure usage-based billing / overage is off; create
+3. **ElevenLabs**: the Free plan fits the shipped limits (a paid plan needs
+   higher ones); make sure usage-based billing / overage is off; create
    an API key with Text to Speech and User (read) access. Don't paste it anywhere
    but the prompts below.
 4. **Check the account**: `node scripts/check-elevenlabs.mjs --sample` and

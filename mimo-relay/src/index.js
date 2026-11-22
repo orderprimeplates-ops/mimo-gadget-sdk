@@ -41,6 +41,20 @@ function json(status, error, extra = {}) {
   });
 }
 
+// At most max characters (code points) of text: up to the last sentence end
+// that fits, else the last word break, else max. Only what's kept is spoken
+// and counted; MIMO shows the whole reply on screen.
+export function clip(text, max) {
+  const cps = [...text];
+  if (cps.length <= max) return text;
+  const cut = cps.slice(0, max).join('');
+  const sentence = /^[\s\S]*[.!?](?=\s|$)/.exec(cut);
+  if (sentence && [...sentence[0]].length >= max / 2) return sentence[0];
+  const space = cut.lastIndexOf(' ');
+  if (space > cut.length / 2) return cut.slice(0, space);
+  return cut;
+}
+
 function intVar(value, fallback) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -67,9 +81,9 @@ export function config(env) {
     format: env.OUTPUT_FORMAT || 'mp3_24000_48',
     voices,
     voiceSettings,
-    maxText: intVar(env.MAX_TEXT_CHARS, 1000),
-    deviceDaily: intVar(env.DEVICE_DAILY_CHARS, 10000),
-    monthly: intVar(env.MONTHLY_CHARS, 100000),
+    maxText: intVar(env.MAX_TEXT_CHARS, 300),
+    deviceDaily: intVar(env.DEVICE_DAILY_CHARS, 500),
+    monthly: intVar(env.MONTHLY_CHARS, 8000),
     billingDay: Math.min(intVar(env.BILLING_DAY, 1), 28),
     billingHour: Math.max(0, Math.min(Number.parseInt(env.BILLING_HOUR || '0', 10) || 0, 23)),
   };
@@ -121,10 +135,11 @@ export async function handle(request, env, ctx, deps = {}) {
   if (!body || body.v !== 1 || body.format !== 'mp3' || typeof body.text !== 'string') {
     return json(400, 'expected {"v":1,"format":"mp3","voice":...,"text":...}');
   }
-  const text = body.text.trim();
+  const whole = body.text.trim();
+  if (!whole) return json(400, 'empty text');
+  const text = clip(whole, cfg.maxText);   // longer replies: their start is spoken
   const chars = [...text].length;
-  if (!chars) return json(400, 'empty text');
-  if (chars > cfg.maxText) return json(400, `text over ${cfg.maxText} characters`);
+  const clipped = text.length < whole.length;
   const profile = body.voice ?? 'mimo';
   if (typeof profile !== 'string' || !VOICE_PROFILE_RE.test(profile)) return json(400, 'bad voice profile');
   const voiceId = cfg.voices[profile];
@@ -192,13 +207,14 @@ export async function handle(request, env, ctx, deps = {}) {
     return json(502, 'voice provider error');
   }
 
-  log({ device, chars, outcome: 'ok', ms: (deps.now ? deps.now() : Date.now()) - started, deviceToday: held.deviceToday, month: held.month });
+  log({ device, chars, clipped, outcome: 'ok', ms: (deps.now ? deps.now() : Date.now()) - started, deviceToday: held.deviceToday, month: held.month });
   return new Response(upstream.body, {
     status: 200,
     headers: {
       'content-type': 'audio/mpeg',
       'cache-control': 'no-store',
       'x-mimo-chars': String(chars),
+      'x-mimo-clipped': clipped ? '1' : '0',
     },
   });
 }

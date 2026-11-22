@@ -102,7 +102,8 @@ Accept: audio/mpeg
 
 `mimo-relay/` does all of this: HTTPS only (Cloudflare); each device token
 kept as a SHA-256 hash and compared in constant time; two live tokens per
-device for rotation; 1000 characters a request, 12 requests a minute and an
+device for rotation; 300 characters spoken a request (longer replies are cut
+at a sentence; the whole reply still shows), 12 requests a minute and an
 exact daily (per device) and monthly (all devices) character budget; the
 ElevenLabs key in Cloudflare's secret store; logs with counts and outcomes,
 never reply text. ElevenLabs' own 401 is never passed to MIMO as 401.
