@@ -44,6 +44,16 @@ build directory of its own, so the stock build is never affected.
 (`mimo`); the relay maps it to a provider voice, so changing MIMO's voice never
 needs new firmware.
 
+## MIMO's voice
+
+**ElevenLabs, voice "MIMO" (`HPxy2zOoCDbTjLDGYzNm`)**, chosen by audition
+(`mimo/voice-audition.md`). The voice ID lives only in the relay's
+`wrangler.toml` (`VOICES = '{"mimo":"HPxy2zOoCDbTjLDGYzNm"}'`), with the model
+(`eleven_flash_v2_5`) and output format (`mp3_24000_48`). The firmware only
+names the profile `mimo`. To change the voice, model or settings, edit the
+relay and redeploy; the Waveshare is never reflashed. The relay itself is
+[`mimo-relay/`](../../mimo-relay/README.md): a Cloudflare Worker, not deployed.
+
 ## What happens in a turn
 
 1. A reply message finishes (`TTS_QUEUED`). `start_tts()` asks `mimo_speak()`
@@ -72,6 +82,9 @@ needs new firmware.
 
 ## Relay protocol (v1)
 
+Implemented by [`mimo-relay/`](../../mimo-relay/README.md); the relay URL is
+`https://<worker>/v1/speak`.
+
 ```
 POST <relay URL>
 Authorization: Bearer <device relay token>
@@ -87,11 +100,12 @@ Accept: audio/mpeg
   48 kbps (what `test_reply.mp3` is), streamed or with a Content-Length.
 - `401`/`403`: token unknown or revoked. `429`: slow down. No redirects.
 
-The relay should, at minimum: accept HTTPS only; store each device token as
-a SHA-256 hash and compare in constant time; allow two live tokens per device
-(for rotation); limit text length and requests per token per minute and day;
-cap spending at the provider; keep the provider key in its secret store; log
-counts and errors, not reply text.
+`mimo-relay/` does all of this: HTTPS only (Cloudflare); each device token
+kept as a SHA-256 hash and compared in constant time; two live tokens per
+device for rotation; 1000 characters a request, 12 requests a minute and an
+exact daily (per device) and monthly (all devices) character budget; the
+ElevenLabs key in Cloudflare's secret store; logs with counts and outcomes,
+never reply text. ElevenLabs' own 401 is never passed to MIMO as 401.
 
 ## Credentials: provisioning and rotation
 
@@ -100,8 +114,9 @@ lets that one device ask that one relay for speech. The provider's API key
 never leaves the relay.
 
 - **Make a token** on your own computer, never in chat or in the repository:
-  `python3 -c "import secrets; print('mimo_dev_' + secrets.token_urlsafe(32))"`.
-  Register its hash with the relay.
+  `node mimo-relay/scripts/new-device-token.mjs --device mimo-175c --out ~/mimo-token.txt`
+  writes it to an owner-only file and prints only its hash, for the relay's
+  `DEVICE_TOKENS` secret.
 - **Give it to MIMO** over the USB cable:
   `python3 tools/mimo/provision_relay.py --url https://<relay>/v1/speak`. It
   asks for the token at a hidden prompt (or `--token-file`), sends it once as a

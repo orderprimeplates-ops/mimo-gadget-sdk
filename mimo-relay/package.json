@@ -1,0 +1,10 @@
+{
+  "name": "mimo-relay",
+  "private": true,
+  "type": "module",
+  "description": "MIMO voice relay: a Cloudflare Worker that turns MIMO's reply text into ElevenLabs speech. Not deployed.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

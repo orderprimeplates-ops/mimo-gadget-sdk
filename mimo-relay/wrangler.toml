@@ -1,0 +1,61 @@
+# Copyright (c) the MIMO project contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The MIMO voice relay (README.md). NOT deployed. Nothing secret belongs in
+# this file: ELEVENLABS_API_KEY and DEVICE_TOKENS are set with
+# `wrangler secret put` and live only in Cloudflare's secret store.
+
+name = "mimo-relay"
+main = "src/index.js"
+compatibility_date = "2025-11-01"
+workers_dev = true
+
+[vars]
+# Off until it's switched on deliberately (README.md, "Activate").
+SPEECH_ENABLED = "false"
+# Voice profiles MIMO can ask for (its mimo.tts.voice setting, "mimo" by
+# default) -> ElevenLabs voice IDs. Change a voice here and redeploy: no
+# firmware change, no reflash.
+VOICES = '{"mimo":"HPxy2zOoCDbTjLDGYzNm"}'
+# Flash v2.5: ElevenLabs' fastest and cheapest model. Change it to compare
+# expressiveness (eleven_multilingual_v2, eleven_v3) at a higher price.
+MODEL_ID = "eleven_flash_v2_5"
+# What MIMO's decoder is tested with: mono MP3, 24 kHz, 48 kbps.
+OUTPUT_FORMAT = "mp3_24000_48"
+# Empty: the voice's own settings from the ElevenLabs voice page. Or JSON, e.g.
+# '{"stability":0.45,"similarity_boost":0.8,"style":0.3,"use_speaker_boost":true}'
+VOICE_SETTINGS = ""
+# Spending guards, in characters (ElevenLabs bills characters).
+MAX_TEXT_CHARS = "1000"
+DEVICE_DAILY_CHARS = "10000"
+MONTHLY_CHARS = "100000"
+
+# Bursts: at most 12 requests a minute per device (approximate, per location).
+# Check this block with `npx wrangler deploy --dry-run` before activating.
+[[ratelimits]]
+name = "BURST"
+namespace_id = "1001"
+simple = { limit = 12, period = 60 }
+
+# The exact spending counter (src/budget.js).
+[[durable_objects.bindings]]
+name = "BUDGET"
+class_name = "Budget"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Budget"]
+
+[observability]
+enabled = true

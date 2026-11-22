@@ -16,6 +16,10 @@ limitations under the License.
 
 # MIMO voice audition
 
+**Chosen: ElevenLabs, voice "MIMO" (`HPxy2zOoCDbTjLDGYzNm`).** It's the
+default in the relay (`mimo-relay/wrangler.toml`, `VOICES`). Rerun this
+audition to compare a new voice before changing it there.
+
 Compare providers with the **same words, in the same order**, at each
 provider's default speed. Use free demos only; no API keys or billing needed.
 

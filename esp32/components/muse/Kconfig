@@ -616,7 +616,8 @@ menu "Muse"
         default "mimo"
         help
             A name the relay maps to a provider and voice (a-z, 0-9, _ and
-            -), so the voice can change without new firmware. The
+            -), so the voice can change without new firmware: mimo-relay's
+            VOICES maps "mimo" to the ElevenLabs voice MIMO. The
             mimo.tts.voice setup command overrides it.
 
     config MUSE_REPLY_NOTIFY

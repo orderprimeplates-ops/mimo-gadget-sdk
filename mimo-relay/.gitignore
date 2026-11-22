@@ -1,0 +1,9 @@
+# Local Worker secrets for `wrangler dev`: never commit.
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+# Device tokens made by scripts/new-device-token.mjs, if saved here by mistake.
+*token*.txt
+node_modules/
+.wrangler/

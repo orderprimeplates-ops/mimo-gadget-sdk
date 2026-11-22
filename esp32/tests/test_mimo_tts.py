@@ -287,5 +287,28 @@ class MimoProvisioning(unittest.TestCase):
         self.assertTrue(mod.TOKEN_RE.match(self.TOKEN))
 
 
+class MimoRelayContract(unittest.TestCase):
+    """The firmware, its provisioning tool and the relay (../mimo-relay) agree."""
+
+    def test_token_rule_text_limit_and_audio_format_match(self):
+        relay = ROOT.parent / 'mimo-relay'
+        auth = (relay / 'src/auth.js').read_text()
+        core = (MUSE / 'mimo_tts_core.h').read_text()
+        tool = (ROOT / 'tools/mimo/provision_relay.py').read_text()
+        lo = re.search(r'#define MIMO_TTS_TOKEN_MIN (\d+)', core).group(1)
+        hi = re.search(r'#define MIMO_TTS_TOKEN_MAX (\d+)', core).group(1)
+        rule = f'[A-Za-z0-9._~+/=-]{{{lo},{hi}}}'
+        self.assertIn(f'/^{rule}$/', auth)
+        self.assertIn(f"'^{rule}$'", tool)
+        toml = (relay / 'wrangler.toml').read_text()
+        text_max = int(re.search(r'#define MIMO_TTS_TEXT_MAX (\d+)', core).group(1))
+        # The firmware sends at most MIMO_TTS_TEXT_MAX bytes: never more characters.
+        self.assertGreaterEqual(int(re.search(r'MAX_TEXT_CHARS = "(\d+)"', toml).group(1)), text_max)
+        # What the decoder tests play (test_reply.mp3) is what the relay asks for.
+        self.assertIn('OUTPUT_FORMAT = "mp3_24000_48"', toml)
+        self.assertIn('VOICES = \'{"mimo":"HPxy2zOoCDbTjLDGYzNm"}\'', toml)
+        self.assertIn('default "mimo"', between((MUSE / 'Kconfig').read_text(), 'config MIMO_TTS_VOICE_DEFAULT', 'config MUSE_REPLY_NOTIFY'))
+
+
 if __name__ == '__main__':
     unittest.main()

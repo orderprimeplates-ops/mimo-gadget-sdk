@@ -21,7 +21,9 @@ ESP32-S3-Touch-AMOLED-1.75C.
 
 - **Voice**: replies spoken through the MIMO voice relay, behind
   `CONFIG_MIMO_TTS` (off by default). See [docs/mimo-tts.md](../docs/mimo-tts.md).
-  Choose the voice with [voice-audition.md](voice-audition.md).
+  The voice is ElevenLabs "MIMO" (`HPxy2zOoCDbTjLDGYzNm`), set in the relay
+  ([`mimo-relay/`](../../mimo-relay/README.md), not deployed), so it changes
+  without a reflash. [voice-audition.md](voice-audition.md) compares voices.
 - **Character**: `avatar/mimo_pixel.c` is a **placeholder** marshmallow that
   implements the whole avatar interface (`components/muse/muse_pixel.h`).
   The approved MIMO design replaces its drawing code.
