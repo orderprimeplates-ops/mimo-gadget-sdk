@@ -93,6 +93,9 @@ extern "C" {
 #if CONFIG_MUSE_RESEND_NOTES
 #include "muse_resend.h"
 #endif
+#if CONFIG_MIMO_TTS
+#include "mimo_tts.h"
+#endif
 
 #include <xplat/noise/core/ClientSession.h>
 #include <xplat/noise/core/PsaCryptoBackend.h>
@@ -336,6 +339,10 @@ static bool s_option_sending;
 static int64_t s_option_state_us;
 static std::atomic<bool> s_incoming{false};   /* a reply is held: muse_hatch_incoming() */
 static std::atomic<bool> s_incoming_used{false};   /* a voice task plays them (the Voice PE's doesn't) */
+#if CONFIG_MIMO_TTS
+static uint32_t s_mimo_job;   /* the relay job speaking s_turn.tts_msg, 0 when none (mimo_tts.h) */
+static bool s_mimo_heard;     /* that job has delivered audio */
+#endif
 
 /* Turn milestones, logged together when the turn ends. */
 enum mark_t : uint8_t { M_RELEASE, M_SENT, M_ACK, M_TEXT, M_DONE, M_TTS, M_MP3, M_AUDIO, M_COUNT };
@@ -1129,6 +1136,10 @@ static void turn_finish(void)
         s_option_sending = false;
     }
     turn_reset_streams();
+#if CONFIG_MIMO_TTS
+    mimo_tts_cancel();   /* its unread audio is dropped with it */
+    s_mimo_job = 0;
+#endif
     s_turn.phase = P_IDLE;
     s_turn.dict_id = s_turn.chat_id = 0;
     s_turn.tts_msg = -1;
@@ -2132,6 +2143,71 @@ static void on_chat_ack(stream_t *s)
 
 /* ---- Turn: speech ---- */
 
+#if CONFIG_MIMO_TTS
+/* ---- MIMO speech: a message spoken through the MIMO voice relay ---- */
+
+/* Asks the relay to say message i. False, with nothing changed, if it won't:
+ * the message is then shown at reading pace as before. */
+static bool mimo_speak(int i)
+{
+    if (!s_turn.texts || !muse_settings_speaker_on()) {
+        return false;   /* nothing to send, or nothing to hear it with */
+    }
+    const char *text = s_turn.texts + i * TEXT_MAX;
+    uint32_t job = mimo_tts_start(text, CAPTION_LEN(text));
+    if (!job) {
+        return false;
+    }
+    msg_t &m = s_turn.msgs[i];
+    s_mimo_job = job;
+    s_mimo_heard = false;
+    m.tts = TTS_ACTIVE;
+    s_turn.tts_msg = i;
+    s_turn.silent = false;
+    m.pcm_start = s_turn.pcm_out;
+    m.pcm_frames = 0;
+    s_turn.mp3_len = 0;
+    s_turn.mp3_ended = false;
+    s_turn.kbps = 0;
+    s_turn.down_rate = 0;
+    mp3dec_init(&s_turn.dec);
+    mark(M_TTS);
+    ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
+    show_reply_start(m);
+    return true;
+}
+
+/* Moves the relay's audio into the MP3 buffer without waiting, for decode().
+ * A job that ends with no audio at all shows its message at reading pace. */
+static void mimo_pump(void)
+{
+    if (!s_mimo_job || s_turn.tts_msg < 0 || s_turn.silent || s_turn.mp3_ended) {
+        return;
+    }
+    size_t got = 0;
+    mimo_tts_state_t st = mimo_tts_take(s_mimo_job, s_turn.mp3 + s_turn.mp3_len, MP3_BUF - s_turn.mp3_len, &got);
+    if (got) {
+        mark(M_MP3);
+        s_turn.mp3_len += got;
+        s_mimo_heard = true;
+    }
+    if (st == MIMO_TTS_STREAMING) {
+        return;
+    }
+    s_mimo_job = 0;
+    if (st == MIMO_TTS_DONE || s_mimo_heard) {
+        s_turn.mp3_ended = true;   /* decode() drains it, then finishes the message */
+        return;
+    }
+    ESP_LOGW(TAG, "relay gave no speech (%s): showing the reply", mimo_tts_err_name(mimo_tts_last_error()));
+    msg_t &m = s_turn.msgs[s_turn.tts_msg];
+    m.pcm_start = s_turn.pcm_out;
+    m.pcm_frames = (uint32_t)(CAPTION_LEN(s_turn.texts + s_turn.tts_msg * TEXT_MAX) * MIC_RATE / TEXT_CHARS_PER_S);
+    s_turn.silent = true;
+}
+/* ---- end MIMO speech ---- */
+#endif
+
 static void start_tts(void)
 {
     if (s_turn.tts_msg >= 0) {
@@ -2157,6 +2233,11 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
+#if CONFIG_MIMO_TTS
+        if (mimo_speak(i)) {
+            return;
+        }
+#endif
         m.pcm_start = s_turn.pcm_out;
         /* Paced to the text kept: a reply longer than CAPTION_TEXT shows what
          * was kept at reading pace, not stretched over the whole reply's time
@@ -2789,6 +2870,9 @@ static void hatch_task(void *arg)
         }
         if (s_turn.phase == P_WAIT_REPLY) {
             start_tts();
+#if CONFIG_MIMO_TTS
+            mimo_pump();
+#endif
             decode();
         }
         if (!s_connected) {
@@ -2884,6 +2968,9 @@ extern "C" void muse_hatch_start(void)
         if (!s.line) lines = false;
     }
     s_turn.tts_msg = -1;
+#if CONFIG_MIMO_TTS
+    mimo_tts_init();   /* speech stays off if it can't start; replies show as text */
+#endif
 #if CONFIG_MUSE_REALTIME_VOICE
     muse_voice_call_init();   /* calls stay unavailable if it fails; notes still work */
 #endif

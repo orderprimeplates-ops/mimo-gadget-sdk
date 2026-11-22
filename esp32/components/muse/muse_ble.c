@@ -33,6 +33,9 @@
 #include "muse_state.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
+#if CONFIG_MIMO_TTS
+#include "mimo_tts.h"
+#endif
 
 static const char *TAG = "muse_ble";
 
@@ -132,6 +135,9 @@ static void run_command(char *cmd)
     }
     int n;
     const char *res = "ok";
+#if CONFIG_MIMO_TTS
+    char mimo_status[40];   /* fits s_last; mimo_tts_describe() logs the whole of it */
+#endif
 
     if (!strcmp(cmd, "wifi.ssid")) {
         strlcpy(s_pending_ssid, v, sizeof(s_pending_ssid));
@@ -179,12 +185,37 @@ static void run_command(char *cmd)
     } else if (!strcmp(cmd, "motion.quiet") && parse_int(v, 0, 1, &n)) {
         muse_settings_set_face_down_quiet(n);
 #endif
+#if CONFIG_MIMO_TTS
+    /* The MIMO voice relay (docs/mimo-tts.md). The token is never echoed or
+     * logged: mimo.tts.status shows its length and a short hash. */
+    } else if (!strcmp(cmd, "mimo.tts.url")) {
+        const char *err = mimo_tts_set_url(v);
+        res = err ? err : "ok";
+    } else if (!strcmp(cmd, "mimo.tts.token")) {
+        const char *err = mimo_tts_set_token(v);
+        res = err ? err : "ok";
+    } else if (!strcmp(cmd, "mimo.tts.voice")) {
+        const char *err = mimo_tts_set_voice(v);
+        res = err ? err : "ok";
+    } else if (!strcmp(cmd, "mimo.tts.on") && parse_int(v, 0, 1, &n)) {
+        const char *err = mimo_tts_set_enabled(n);
+        res = err ? err : "ok";
+    } else if (!strcmp(cmd, "mimo.tts.clear")) {
+        mimo_tts_clear();
+    } else if (!strcmp(cmd, "mimo.tts.status")) {
+        mimo_tts_describe(mimo_status, sizeof(mimo_status));
+        res = mimo_status;
+#endif
     } else {
         res = "error: unknown command or bad value";
     }
 
     /* Never echo secrets back. */
     bool secret = !strcmp(cmd, "wifi.pass") || !strncmp(cmd, "hatch.token", 11);
+#if CONFIG_MIMO_TTS
+    /* The relay token, and its URL: one could carry a key in its query. */
+    secret = secret || !strncmp(cmd, "mimo.tts.token", 14) || !strcmp(cmd, "mimo.tts.url");
+#endif
     snprintf(s_last, sizeof(s_last), "%s: %s", cmd, res);
     ESP_LOGI(TAG, "cmd %s%s%s -> %s", cmd, secret ? "" : "=", secret ? "" : v, res);
     muse_state_poke();

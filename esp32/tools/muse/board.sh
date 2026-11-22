@@ -32,6 +32,8 @@
 # MUSE_APPS=1 adds devices/sdkconfig.muse-apps (WebAssembly apps: app.run) in
 # build-muse-<profile>-apps/.
 # MUSE_MIRROR=1 adds the cable mirror in build-muse-<profile>-mirror/.
+# MIMO_TTS=1 adds devices/sdkconfig.mimo-tts (replies spoken through the MIMO
+# voice relay, docs/mimo-tts.md) in build-muse-<profile>-mimo-tts/.
 # mosaico (Espressif ESP-Mosaico, ESP32-S31) builds with ESP-IDF master
 # (IDF_EXPORT_S31) and Espressif's esp-mosaico-utils (MOSAICO_UTILS), and
 # flashes through the board's Vibe Mode firmware with their mosaico.py: an
@@ -134,6 +136,9 @@ if [ -n "${MUSE_APPS:-}" ]; then
 fi
 if [ -n "${MUSE_MIRROR:-}" ]; then
     B=$B-mirror; defaults="$defaults;devices/sdkconfig.muse-mirror"
+fi
+if [ -n "${MIMO_TTS:-}" ]; then
+    B=$B-mimo-tts; defaults="$defaults;devices/sdkconfig.mimo-tts"
 fi
 if [ -n "${MUSE_BENCH:-}" ]; then
     B=$B-bench; defaults="$defaults;devices/sdkconfig.muse-bench"

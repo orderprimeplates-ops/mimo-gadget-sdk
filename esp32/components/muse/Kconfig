@@ -594,6 +594,31 @@ menu "Muse"
             them. Needs PSRAM. Without it, voice notes go over Home Link's own
             session to its paired VM and replies are shown as text.
 
+    config MIMO_TTS
+        bool "MIMO: speak replies through the MIMO voice relay (experimental)"
+        depends on MUSE_HATCH && SPIRAM && !MUSE_UI_FREEINK
+        default n
+        help
+            Voice-note replies are spoken: each finished message's text goes
+            to the MIMO voice relay over HTTPS, on a task and connection of
+            its own, and the MP3 it streams back plays through the reply
+            decoder with captions following. The relay holds the TTS
+            provider's key and picks the voice; the gadget only has its own
+            relay token. If the relay isn't set up, refuses, is slow or
+            fails before any audio arrives, the reply is shown as text, as
+            with this option off. Set the relay with the mimo.tts.url and
+            mimo.tts.token setup commands (USB console or authenticated
+            BLE); nothing secret is compiled in. See docs/mimo-tts.md.
+
+    config MIMO_TTS_VOICE_DEFAULT
+        string "MIMO: voice profile asked of the relay"
+        depends on MIMO_TTS
+        default "mimo"
+        help
+            A name the relay maps to a provider and voice (a-z, 0-9, _ and
+            -), so the voice can change without new firmware. The
+            mimo.tts.voice setup command overrides it.
+
     config MUSE_REPLY_NOTIFY
         bool "Flash the screen and ping when a reply arrives"
         depends on MUSE_HATCH && !MUSE_UI_FREEINK

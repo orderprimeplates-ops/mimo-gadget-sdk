@@ -155,7 +155,14 @@ set(MUSE_COMPONENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../components/muse")
 # after configure. Keep exactly one renderer in the executable.
 file(GLOB MUSE_SIM_CUSTOM_AVATAR CONFIGURE_DEPENDS
      "${MUSE_COMPONENT_DIR}/avatar/muse_pixel.c")
-if(MUSE_SIM_CUSTOM_AVATAR)
+# MUSE_SIM_AVATAR previews another renderer in the simulator only, such as
+# MIMO's (mimo/avatar/mimo_pixel.c, tools/mimo/preview.py); firmware builds
+# never see it.
+set(MUSE_SIM_AVATAR "" CACHE FILEPATH "Avatar renderer to preview instead (simulator only)")
+if(MUSE_SIM_AVATAR)
+    set(MUSE_SIM_AVATAR_SOURCE "${MUSE_SIM_AVATAR}")
+    message(STATUS "Simulator avatar: ${MUSE_SIM_AVATAR}")
+elseif(MUSE_SIM_CUSTOM_AVATAR)
     set(MUSE_SIM_AVATAR_SOURCE "${MUSE_COMPONENT_DIR}/avatar/muse_pixel.c")
 else()
     set(MUSE_SIM_AVATAR_SOURCE "${MUSE_COMPONENT_DIR}/../../avatar/muse_pixel.c")
