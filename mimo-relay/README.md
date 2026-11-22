@@ -152,6 +152,56 @@ ElevenLabs' terms before using MIMO for business.
 needs Pro. Raise `MONTHLY_CHARS`, `DEVICE_DAILY_CHARS` and `MAX_TEXT_CHARS`
 only together with the plan.
 
+## Deployed from GitHub (Cloudflare Workers Builds)
+
+The relay deploys through Cloudflare's GitHub integration, set up from the
+Cloudflare dashboard; nothing has to be installed on a computer.
+
+| Setting (Workers & Pages → mimo-relay → Settings → Build) | Value |
+|---|---|
+| Repository | `orderprimeplates-ops/mimo-gadget-sdk` |
+| Worker name | `mimo-relay` (must match `name` in `wrangler.toml`) |
+| Production branch | `claude/jolly-faraday-ewyut7` (not `main`, which has no `mimo-relay/`) |
+| Root directory | `mimo-relay` |
+| Build command | none |
+| Deploy command | `npx wrangler deploy` |
+| Preview builds | off |
+
+**What a push does.** Every push to the production branch builds and deploys
+the relay: Cloudflare installs the pinned Wrangler (`package-lock.json`) and
+runs `npx wrangler deploy` from `mimo-relay/`, which applies `wrangler.toml`.
+If the dashboard offers build watch paths, `mimo-relay/*` keeps firmware-only
+pushes from rebuilding it.
+
+**`wrangler.toml` is the source of truth.** Each deploy sets the variables
+from its `[vars]`, replacing any edited in the dashboard, so these always come
+from the repository:
+
+| Variable | Value | Why |
+|---|---|---|
+| `SPEECH_ENABLED` | `"false"` | Nothing reaches ElevenLabs until it's switched on here and pushed |
+| `MAX_TEXT_CHARS` | `"300"` | At most 300 characters spoken per reply |
+| `DEVICE_DAILY_CHARS` | `"500"` | About 1–2 spoken replies a day per device |
+| `MONTHLY_CHARS` | `"8000"` | Inside the ElevenLabs Free plan's 10,000 credits |
+
+To switch speech on (later), change `SPEECH_ENABLED` to `"true"` in this file
+and push; to switch it off, change it back and push. Turning it on in the
+dashboard alone is undone by the next deploy.
+
+**Secrets are separate.** `ELEVENLABS_API_KEY` and `DEVICE_TOKENS` are added
+in the dashboard (Settings → Variables and Secrets, type **Secret**) and are
+kept across deploys. Until both exist, the relay answers `503 relay not set
+up` even with speech on. They never go in this repository.
+
+**Checking a deploy.** The build log names the commit and ends with
+`wrangler deploy` listing the `BUDGET` (Durable Object) and `BURST` (rate
+limit) bindings. Settings → Variables should show the four values above, and
+opening `https://mimo-relay.<your-subdomain>.workers.dev/v1/speak` in a
+browser should answer `{"error":"POST only"}`: live, and spending nothing.
+If Cloudflare refuses the rate limiter on the Free plan, removing the
+`[[ratelimits]]` block keeps the relay safe: the character budgets still cap
+spending.
+
 ## Activate on a Mac (later; each step only when you decide)
 
 You need: a Mac, the ElevenLabs account with the MIMO voice, and about 30
