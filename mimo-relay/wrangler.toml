@@ -40,6 +40,11 @@ VOICE_SETTINGS = ""
 MAX_TEXT_CHARS = "1000"
 DEVICE_DAILY_CHARS = "10000"
 MONTHLY_CHARS = "100000"
+# When MONTHLY_CHARS starts over: day of month (1-28) and hour (0-23, UTC).
+# Set them to the ElevenLabs subscription's renewal (scripts/check-elevenlabs.mjs
+# prints both), so one relay period never spans two ElevenLabs credit periods.
+BILLING_DAY = "1"
+BILLING_HOUR = "0"
 
 # Bursts: at most 12 requests a minute per device (approximate, per location).
 # Check this block with `npx wrangler deploy --dry-run` before activating.

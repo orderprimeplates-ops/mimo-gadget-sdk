@@ -63,7 +63,8 @@ Five layers, any of which stops spending:
 3. **Bursts**: 12 requests a minute per device (Cloudflare rate limiter).
 4. **Exact budgets** (Durable Object, characters reserved before ElevenLabs is
    called, refunded if it fails): `DEVICE_DAILY_CHARS` (10,000) per device per
-   UTC day and `MONTHLY_CHARS` (100,000) for all devices per UTC month.
+   UTC day and `MONTHLY_CHARS` (100,000) for all devices per billing period
+   (from `BILLING_DAY` at `BILLING_HOUR`, matching the ElevenLabs renewal).
    Over budget, MIMO is told to wait (`429`, `Retry-After`) and shows replies
    as text.
 5. **At ElevenLabs**: use a plan with a fixed credit allowance and no
@@ -76,56 +77,98 @@ requests fail until the next day.
 ## Tests
 
 ```sh
-cd mimo-relay && npm test      # Node 20+, no packages, no network
+cd mimo-relay && npm test      # Node 20+, no network, no Cloudflare or ElevenLabs account
 ```
 
-22 tests: routing, the kill switch, authentication and rotation, the exact
+28 tests: routing, the kill switch, authentication and rotation, the exact
 ElevenLabs request (voice, model, format, key header), MIMO's own request
 body, streaming the MP3 byte for byte, request checks, burst limits, daily and
-monthly budgets with refunds, ElevenLabs failures and time-outs, nothing
-secret in logs or responses, and the token script.
-`esp32/tests/test_mimo_tts.py` checks the firmware and relay agree on the
-token rule, text limit, audio format and voice profile.
+billing-period budgets (aligned to the ElevenLabs renewal) with refunds,
+`blockConcurrencyWhile`, ElevenLabs failures and time-outs, nothing secret in
+logs or responses, and both scripts. `esp32/tests/test_mimo_tts.py` checks the
+firmware and relay agree on the token rule, text limit, audio format and voice.
 
-## Activate (later, step by step, nothing done yet)
+Validated without deploying: `npx wrangler deploy --dry-run` accepts the
+config (`BUDGET` Durable Object, `BURST` rate limit 12/60 s), and `npx wrangler
+dev` ran the Worker in Cloudflare's local runtime: SQLite-backed Durable
+Object, 401s, refunds and the burst limit behaved as tested.
 
-1. **ElevenLabs**: on a plan with API access, confirm the MIMO voice works
-   with `eleven_flash_v2_5` (a short test in the web app), turn overage /
-   usage-based billing off or cap it, and create an API key restricted to
-   Text to Speech.
-2. **Cloudflare**: a free account; `npm install --save-dev wrangler` here, then
-   `npx wrangler login`.
-3. **Check the config**: `npx wrangler deploy --dry-run` (validates the rate
-   limiter and Durable Object bindings without deploying).
-4. **Secrets** (typed at the prompts, never on the command line or in chat):
-   `npx wrangler secret put ELEVENLABS_API_KEY`, then
-   `node scripts/new-device-token.mjs --device mimo-175c --out ~/mimo-token.txt`
-   and `npx wrangler secret put DEVICE_TOKENS` with the JSON it prints.
-5. **Deploy, still off**: `npx wrangler deploy`. Check `/v1/speak` answers 503.
-6. **Switch on** `SPEECH_ENABLED = "true"`, deploy, and test with `curl` from
-   your computer (save the MP3, listen).
-7. **Give MIMO the relay** (firmware built with `MIMO_TTS=1`):
-   `python3 tools/mimo/provision_relay.py --url https://mimo-relay.<you>.workers.dev/v1/speak --token-file ~/mimo-token.txt`,
-   then delete `~/mimo-token.txt`.
+## Spending counter
 
-## Costs (estimates: check the providers' pricing pages before activating)
+- **Persistent**: kept in the Durable Object's SQLite storage, which survives
+  restarts and redeploys.
+- **Race-safe**: one Durable Object ("global") serves every request, and each
+  reserve or refund runs inside `blockConcurrencyWhile`, so read-check-write
+  never interleaves. Characters are reserved before ElevenLabs is called.
+- **Resets**: per device at 00:00 UTC; for everyone at the start of the billing
+  period, `BILLING_DAY` at `BILLING_HOUR` UTC. Set both to the ElevenLabs
+  renewal time (`scripts/check-elevenlabs.mjs` prints it), so one relay period
+  never covers two ElevenLabs credit periods. Renewals after the 28th use 28.
 
-MIMO speaks only voice-note replies, each at most 1000 characters; a typical
-short reply is about 250 characters.
+## Costs
 
-| Use | Replies/day | Characters/month |
-|---|---|---|
-| Light | 15 | ~110,000 |
-| Regular | 40 | ~300,000 |
-| Heavy | 100 | ~750,000 |
+Characters per 30-day month = replies a day × 250 characters × 30.
 
-| Item | Light | Regular | Heavy |
-|---|---|---|---|
-| ElevenLabs, Flash v2.5 at 0.5 credit/char on a plan | Creator, $22 (121k credits) | Pro, $99 (600k credits) | Pro, $99 |
-| ElevenLabs, Flash at 1 credit/char (upper bound) | Creator, $22 | Pro, $99 | Scale, $299 |
-| ElevenLabs Pay As You Go, ~$0.04 per 1k chars (if offered on your account) | ~$4.50 | ~$12 | ~$30 |
-| Cloudflare Workers Free (100k requests/day; Durable Objects included) | $0 | $0 | $0 |
-| **Total** | **$5–22** | **$12–99** | **$30–299** |
+| Use | Replies/day | Characters/month | Credits at 0.5/char | Credits at 1/char |
+|---|---|---|---|---|
+| Light | 15 | 112,500 | 56,250 | 112,500 |
+| Regular | 40 | 300,000 | 150,000 | 300,000 |
+| Heavy | 100 | 750,000 | 375,000 | 750,000 |
 
-The relay's default `MONTHLY_CHARS` (100,000) keeps MIMO inside the Creator
-plan even at 1 credit per character; raise it with the plan.
+ElevenLabs bills Flash v2.5 through the API at 0.5 to 1 credit per character
+depending on plan (`check-elevenlabs.mjs` reports yours). Plans (check
+[elevenlabs.io/pricing](https://elevenlabs.io/pricing) first): Starter $6 =
+30,000 credits, Creator $22 = 121,000, Pro $99 = 600,000, Scale $299 = 1.8M.
+
+| Use | Plan at 0.5/char | Plan at 1/char | Pay as you go (~$0.04 per 1k chars, if offered) | Cloudflare |
+|---|---|---|---|---|
+| Light | Creator $22 | Creator $22 | ~$4.50 | $0 |
+| Regular | Pro $99 | Pro $99 | ~$12 | $0 |
+| Heavy | Pro $99 | Scale $299 | ~$30 | $0 |
+
+**The default `MONTHLY_CHARS` of 100,000** is about 13 replies a day (100,000
+÷ 30 ÷ 250). It costs 50,000 credits at 0.5/char or 100,000 at 1/char: the
+**Creator plan ($22)** covers it either way; Starter doesn't. At 0.5/char,
+Creator could allow up to about 217,000 characters (90% of its credits), about
+29 replies a day. Regular use (40 a day) needs Pro, or MIMO stops speaking
+(and shows text) when the budget runs out.
+
+## Activate on a Mac (later; each step only when you decide)
+
+You need: a Mac, the ElevenLabs account with the MIMO voice, and about 30
+minutes. Nothing is charged until step 8, and only for test sentences.
+
+1. **Install Node.js**: the LTS installer from [nodejs.org](https://nodejs.org).
+   Open Terminal (Applications → Utilities).
+2. **Get the code** (sign in to GitHub if asked):
+   `git clone -b claude/jolly-faraday-ewyut7 https://github.com/orderprimeplates-ops/mimo-gadget-sdk.git`,
+   then `cd mimo-gadget-sdk/mimo-relay` and `npm install`.
+3. **ElevenLabs**: choose a plan (Creator for the default budget); in
+   Subscription settings make sure usage-based billing / overage is off; create
+   an API key with Text to Speech and User (read) access. Don't paste it anywhere
+   but the prompts below.
+4. **Check the account**: `node scripts/check-elevenlabs.mjs --sample` and
+   paste the key at the hidden prompt. Listen to `mimo-sample.mp3` (MIMO on
+   Flash v2.5, about 40 characters of credit). Put the `BILLING_DAY`,
+   `BILLING_HOUR` and (if you like) `MONTHLY_CHARS` it suggests into
+   `wrangler.toml`. Fix anything it marks `FIX:`.
+5. **Cloudflare**: make a free account at
+   [dash.cloudflare.com](https://dash.cloudflare.com), then `npx wrangler login`.
+6. **Check and deploy, speech still off**: `npx wrangler deploy --dry-run`,
+   then `npx wrangler deploy`. It prints the relay's address,
+   `https://mimo-relay.<you>.workers.dev`. If Cloudflare refuses the rate
+   limiter on the Free plan, delete the `[[ratelimits]]` block and deploy again
+   (the character budgets still cap spending).
+7. **Secrets**: `npx wrangler secret put ELEVENLABS_API_KEY` (paste the key);
+   `node scripts/new-device-token.mjs --device mimo-175c --out ~/mimo-token.txt`;
+   `npx wrangler secret put DEVICE_TOKENS` (paste the `{"mimo-175c":[...]}` line
+   it printed).
+8. **Switch on and test**: set `SPEECH_ENABLED = "true"` in `wrangler.toml`,
+   `npx wrangler deploy`, then
+   `curl -sS -X POST https://mimo-relay.<you>.workers.dev/v1/speak -H "Authorization: Bearer $(cat ~/mimo-token.txt)" -H "Content-Type: application/json" -d '{"v":1,"voice":"mimo","format":"mp3","text":"Hi! I am MIMO."}' -o test.mp3 && afplay test.mp3`
+   You should hear MIMO.
+9. **Off switch**, any time: `SPEECH_ENABLED = "false"` and `npx wrangler deploy`.
+   Revoke a token by removing its hash from `DEVICE_TOKENS`.
+
+Giving the relay to the Waveshare (firmware backup, `MIMO_TTS=1` flash,
+`tools/mimo/provision_relay.py`) is a separate step.

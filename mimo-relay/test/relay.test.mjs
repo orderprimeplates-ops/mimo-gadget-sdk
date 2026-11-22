@@ -25,7 +25,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { handle, config } from '../src/index.js';
-import { Budget, reserve } from '../src/budget.js';
+import { Budget, reserve, refund, periodStart, nextPeriodStart } from '../src/budget.js';
 import { sameHex, parseDeviceTokens, TOKEN_RE } from '../src/auth.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -313,6 +313,57 @@ test('budget never lets the cap pass, a request at a time (as the Durable Object
   assert.deepEqual((await storage.get('day')).chars, { d: 100 });
 });
 
+test('billing period follows the ElevenLabs renewal (BILLING_DAY / BILLING_HOUR)', async () => {
+  const at = (iso) => Date.parse(iso);
+  // Renewal on the 15th at 10:00 UTC.
+  assert.equal(periodStart(at('2026-11-15T09:59:59Z'), 15, 10), at('2026-10-15T10:00:00Z'));
+  assert.equal(periodStart(at('2026-11-15T10:00:00Z'), 15, 10), at('2026-11-15T10:00:00Z'));
+  assert.equal(nextPeriodStart(at('2026-11-20T00:00:00Z'), 15, 10), at('2026-12-15T10:00:00Z'));
+  assert.equal(nextPeriodStart(at('2026-12-31T23:00:00Z'), 15, 10), at('2027-01-15T10:00:00Z'));   // over the year
+  assert.equal(periodStart(at('2026-01-05T00:00:00Z'), 15, 10), at('2025-12-15T10:00:00Z'));
+  // The cap holds across a calendar month end, and resets only at the renewal.
+  const storage = memoryStorage();
+  const r = (iso, chars) => reserve(storage, { device: 'd', chars, now: at(iso), deviceDaily: 1e9, monthly: 100, billingDay: 15, billingHour: 10 });
+  assert.ok((await r('2026-11-30T12:00:00Z', 60)).ok);
+  const blocked = await r('2026-12-01T00:30:00Z', 60);   // a new calendar month, same ElevenLabs period
+  assert.ok(!blocked.ok && blocked.reason === 'monthly budget');
+  assert.equal(blocked.retryAfter, (at('2026-12-15T10:00:00Z') - at('2026-12-01T00:30:00Z')) / 1000);
+  assert.ok(!(await r('2026-12-15T09:59:00Z', 60)).ok);
+  assert.ok((await r('2026-12-15T10:00:00Z', 60)).ok);   // renewal: fresh budget
+  // A refund lands in the period it was reserved in.
+  await refund(storage, { device: 'd', chars: 60, now: at('2026-12-15T10:00:01Z'), billingDay: 15, billingHour: 10 });
+  assert.equal((await storage.get('month')).chars, 0);
+});
+
+test('the relay passes BILLING_DAY / BILLING_HOUR to the budget, clamped', async () => {
+  const cfg = config({ BILLING_DAY: '31', BILLING_HOUR: '-4' });
+  assert.equal(cfg.billingDay, 28);
+  assert.equal(cfg.billingHour, 0);
+  assert.equal(config({ BILLING_HOUR: '99' }).billingHour, 23);
+  const e = env({ MONTHLY_CHARS: '20', BILLING_DAY: '15', BILLING_HOUR: '10' });
+  const at = Date.parse('2026-11-14T12:00:00Z');
+  let res = await handle(speak({ text: 'x'.repeat(20) }), e, {}, { fetch: fakeFetch(), now: () => at });
+  assert.equal(res.status, 200);
+  res = await handle(speak({ text: 'x' }), e, {}, { fetch: fakeFetch(), now: () => at });
+  assert.equal(res.status, 429);
+  assert.equal(Number(res.headers.get('retry-after')), (Date.parse('2026-11-15T10:00:00Z') - at) / 1000);
+});
+
+test('the Durable Object runs each budget change inside blockConcurrencyWhile', async () => {
+  let inside = 0, calls = 0;
+  const storage = memoryStorage();
+  const state = {
+    storage,
+    async blockConcurrencyWhile(fn) { calls++; inside++; try { return await fn(); } finally { inside--; } },
+  };
+  const obj = new Budget(state);
+  const body = { device: 'd', chars: 5, now: NOON, deviceDaily: 100, monthly: 100 };
+  const res = await obj.fetch(new Request('https://budget/reserve', { method: 'POST', body: JSON.stringify(body) }));
+  assert.equal((await res.json()).ok, true);
+  assert.equal(calls, 1);
+  assert.equal(inside, 0);
+});
+
 // ---- ElevenLabs failures ----
 
 test('provider errors: 5xx -> 502 and the characters are given back', async () => {
@@ -385,4 +436,59 @@ test('new-device-token.mjs: owner-only file, prints only the hash, never overwri
   assert.notEqual(again.status, 0);
   assert.equal(readFileSync(out, 'utf8').trim(), token);
   assert.ok(existsSync(out));
+});
+
+// ---- scripts/check-elevenlabs.mjs (run by you, with your key) ----
+
+import { summarize, check, VOICE_ID } from '../scripts/check-elevenlabs.mjs';
+
+const FLASH = { model_id: 'eleven_flash_v2_5', can_do_text_to_speech: true, model_rates: { character_cost_multiplier: 0.5 } };
+const RENEW = Date.parse('2026-12-15T10:00:00Z') / 1000;
+
+test('check-elevenlabs: a ready account', () => {
+  const r = summarize({
+    voice: { name: 'MIMO', high_quality_base_model_ids: ['eleven_v2_flash', 'eleven_flash_v2_5', 'eleven_multilingual_v2'] },
+    subscription: { tier: 'creator', character_count: 1000, character_limit: 121000, next_character_count_reset_unix: RENEW,
+                    can_extend_character_limit: false, max_credit_limit_extension: 0 },
+    models: [FLASH],
+  });
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.flashSupported, true);
+  assert.equal(r.creditsPerChar, 0.5);
+  assert.equal(r.billingDay, 15);
+  assert.equal(r.billingHour, 10);
+  assert.equal(r.suggestedMonthlyChars, Math.floor(121000 * 0.9 / 0.5));   // 217,800 characters
+  assert.equal(r.overage, 'off');
+});
+
+test('check-elevenlabs: flags what would block or overspend', () => {
+  const r = summarize({
+    voice: { name: 'MIMO', high_quality_base_model_ids: ['eleven_v3'] },
+    subscription: { tier: 'pro', character_count: 0, character_limit: 600000, next_character_count_reset_unix: Date.parse('2026-12-31T08:00:00Z') / 1000,
+                    can_extend_character_limit: true, max_credit_limit_extension: 'unlimited' },
+    models: [{ model_id: 'eleven_flash_v2_5', can_do_text_to_speech: true }],
+  });
+  assert.equal(r.flashSupported, false);
+  assert.ok(r.problems.some((p) => p.includes("doesn't list eleven_flash_v2_5")));
+  assert.ok(r.problems.some((p) => p.includes('overage')));
+  assert.equal(r.creditsPerChar, null);                         // unknown: assume 1
+  assert.equal(r.suggestedMonthlyChars, Math.floor(600000 * 0.9));
+  assert.equal(r.billingDay, 28);                               // the 31st doesn't exist every month
+  assert.equal(summarize({ voice: null, subscription: null, models: [] }).problems.length, 3);   // voice, model, subscription
+});
+
+test('check-elevenlabs: reads three endpoints with the key in the header only', async () => {
+  const seen = [];
+  const fakeFetch = async (url, init) => {
+    seen.push({ url, key: init.headers['xi-api-key'] });
+    if (url.endsWith(`/voices/${VOICE_ID}`)) return Response.json({ name: 'MIMO', high_quality_base_model_ids: ['eleven_flash_v2_5'] });
+    if (url.endsWith('/user/subscription')) return Response.json({ tier: 'creator', character_count: 0, character_limit: 121000, can_extend_character_limit: false });
+    if (url.endsWith('/models')) return Response.json([FLASH]);
+    return new Response('', { status: 404 });
+  };
+  const r = await check('fake-key-for-tests', { fetchImpl: fakeFetch });
+  assert.equal(r.voiceName, 'MIMO');
+  assert.deepEqual(seen.map((s) => s.url.replace('https://api.elevenlabs.io/v1', '')).sort(),
+    ['/models', '/user/subscription', `/voices/${VOICE_ID}`]);
+  assert.ok(seen.every((s) => s.key === 'fake-key-for-tests' && !s.url.includes('fake-key')));
 });

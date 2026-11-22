@@ -70,6 +70,8 @@ export function config(env) {
     maxText: intVar(env.MAX_TEXT_CHARS, 1000),
     deviceDaily: intVar(env.DEVICE_DAILY_CHARS, 10000),
     monthly: intVar(env.MONTHLY_CHARS, 100000),
+    billingDay: Math.min(intVar(env.BILLING_DAY, 1), 28),
+    billingHour: Math.max(0, Math.min(Number.parseInt(env.BILLING_HOUR || '0', 10) || 0, 23)),
   };
 }
 
@@ -140,12 +142,13 @@ export async function handle(request, env, ctx, deps = {}) {
   // Spending: exact, shared counts, reserved before anything is spent.
   const held = await budget(env, '/reserve', {
     device, chars, now, deviceDaily: cfg.deviceDaily, monthly: cfg.monthly,
+    billingDay: cfg.billingDay, billingHour: cfg.billingHour,
   });
   if (!held.ok) {
     log({ device, chars, outcome: held.reason });
     return json(429, held.reason, { 'retry-after': String(held.retryAfter) });
   }
-  const giveBack = () => budget(env, '/refund', { device, chars, now });
+  const giveBack = () => budget(env, '/refund', { device, chars, now, billingDay: cfg.billingDay, billingHour: cfg.billingHour });
 
   const target = `${ELEVENLABS}/${encodeURIComponent(voiceId)}/stream?output_format=${encodeURIComponent(cfg.format)}`;
   const upstreamBody = { text, model_id: cfg.model };
